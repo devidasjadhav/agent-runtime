@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -24,12 +25,16 @@ import (
 )
 
 func main() {
-	task := flag.String("task", "", "Task for the agent to perform")
-	sandboxDir := flag.String("dir", "", "Working directory for the sandbox (default: temp dir, ignored for ssh)")
+	task        := flag.String("task", "", "Task for the agent to perform")
+	sandboxDir  := flag.String("dir", "", "Working directory for the sandbox (default: temp dir, ignored for ssh)")
 	sandboxType := flag.String("sandbox", "local", "Sandbox type: local or ssh (ssh reads SSH_HOST/SSH_USER/SSH_PASSWORD/SSH_KEY_PATH/SSH_DIR from env)")
-	modelID := flag.String("model", "", "Model ID to use (default: deepseek-chat with DEEPSEEK_API_KEY, otherwise gpt-4o)")
-	stream := flag.Bool("stream", true, "Use streaming mode")
-	maxIter := flag.Int("max-iter", 20, "Maximum agent loop iterations")
+	modelID     := flag.String("model", "", "Model ID to use (default: deepseek-chat with DEEPSEEK_API_KEY, otherwise gpt-4o)")
+	stream      := flag.Bool("stream", true, "Use streaming mode")
+	maxIter     := flag.Int("max-iter", 20, "Maximum agent loop iterations")
+	memoryFile  := flag.String("memory-file", "", "Local AGENTS.md path to inject into the system prompt (MemoryMiddleware)")
+	aclDeny     := flag.String("acl-deny", "", "Glob pattern to deny all file operations, e.g. /etc/** (FilesystemACLMiddleware)")
+	skillsFile  := flag.String("skills-file", "", "Local SKILL.md path to load skills from (SkillsMiddleware)")
+	hitl        := flag.Bool("hitl", false, "Enable human-in-the-loop approval for write_file/edit_file ops via stdin")
 	flag.Parse()
 
 	if *task == "" {
@@ -101,7 +106,7 @@ Complete the user's task using the available tools. After completing the task, p
 
 	retentionStore := agent.NewSandboxRetentionStore(sbx, sbx, 20)
 
-	ag := agent.New(provider, registry,
+	agentOpts := []agent.Option{
 		agent.WithModelID(*modelID),
 		agent.WithSystemPrompt(systemPrompt),
 		agent.WithMaxIterations(*maxIter),
@@ -109,14 +114,55 @@ Complete the user's task using the available tools. After completing the task, p
 		agent.WithMiddleware(middleware.NewCallLimit(50)),
 		agent.WithMiddleware(middleware.NewErrorHandler()),
 		agent.WithResultOffload(retentionStore, 80_000),
-	)
+	}
+
+	if *memoryFile != "" {
+		agentOpts = append(agentOpts, agent.WithMiddleware(
+			middleware.NewMemoryMiddleware(middleware.LocalFileLoader{}, []string{*memoryFile}),
+		))
+	}
+	if *aclDeny != "" {
+		agentOpts = append(agentOpts, agent.WithMiddleware(
+			middleware.NewFilesystemACL([]middleware.Permission{
+				{Pattern: *aclDeny, Operations: middleware.OpAll, Allow: false},
+			}),
+		))
+	}
+	if *skillsFile != "" {
+		agentOpts = append(agentOpts, agent.WithMiddleware(
+			middleware.NewSkillsMiddleware(middleware.LocalFileLoader{}, []middleware.SkillSource{
+				{Path: *skillsFile},
+			}),
+		))
+	}
+	if *hitl {
+		agentOpts = append(agentOpts, agent.WithMiddleware(
+			middleware.NewHumanInTheLoop(StdinApprovalGate{}, middleware.TriggerOnWriteOps()),
+		))
+	}
+
+	ag := agent.New(provider, registry, agentOpts...)
 
 	fmt.Printf("=== Agent Demo ===\n")
-	fmt.Printf("Task: %s\n", *task)
-	fmt.Printf("Sandbox: %s (%s)\n", *sandboxType, displayDir)
-	fmt.Printf("Provider: %s\n", profile.Name)
-	fmt.Printf("Model: %s\n", *modelID)
-	fmt.Printf("Mode: %s\n\n", map[bool]string{true: "streaming", false: "complete"}[*stream])
+	fmt.Printf("Task:      %s\n", *task)
+	fmt.Printf("Sandbox:   %s (%s)\n", *sandboxType, displayDir)
+	fmt.Printf("Provider:  %s\n", profile.Name)
+	fmt.Printf("Model:     %s\n", *modelID)
+	fmt.Printf("Mode:      %s\n", map[bool]string{true: "streaming", false: "complete"}[*stream])
+	fmt.Printf("Middleware:")
+	if *memoryFile != "" {
+		fmt.Printf(" memory(%s)", *memoryFile)
+	}
+	if *aclDeny != "" {
+		fmt.Printf(" acl-deny(%s)", *aclDeny)
+	}
+	if *skillsFile != "" {
+		fmt.Printf(" skills(%s)", *skillsFile)
+	}
+	if *hitl {
+		fmt.Printf(" hitl(write-ops)")
+	}
+	fmt.Printf("\n\n")
 
 	input := agent.Input{
 		Messages: []model.Message{
@@ -249,4 +295,30 @@ func mustMarshal(v any) string {
 		return "{}"
 	}
 	return string(b)
+}
+
+// StdinApprovalGate implements middleware.ApprovalGate via stdin.
+// When HITL triggers, prints the tool name + args and waits for "y" to approve.
+type StdinApprovalGate struct{}
+
+func (StdinApprovalGate) RequestApproval(ctx context.Context, toolName string, args json.RawMessage) (bool, string, error) {
+	fmt.Printf("\n[HITL] %s(%s)\nApprove? [y/N]: ", toolName, args)
+	ch := make(chan string, 1)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		if scanner.Scan() {
+			ch <- strings.TrimSpace(scanner.Text())
+		} else {
+			ch <- ""
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return false, "", ctx.Err()
+	case line := <-ch:
+		if strings.ToLower(line) == "y" {
+			return true, "", nil
+		}
+		return false, "operator rejected", nil
+	}
 }
