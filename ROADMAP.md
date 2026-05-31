@@ -364,3 +364,49 @@ Status: complete. `CheckpointStore` interface with `Save`/`Load`/`List`:
 - `AgentHandle.maybeCheckpoint()` saves state on `tool_result` and `completed` events
 - `CheckpointState` with thread ID, run ID, step, messages, tool calls, metadata
 - Control plane provides concrete implementation (e.g., PostgreSQL, Redis, file-based)
+
+## Phase 6: Advanced Middleware
+
+Status: in planning. See `MIDDLEWARE_PLAN.md` for full spec of each phase.
+
+Goal: close the remaining gap between our middleware stack and deepagents by adding
+memory injection, filesystem ACLs, skills/plugin system, and human-in-the-loop gating.
+
+### Phase 6A — MemoryMiddleware
+
+Status: pending.
+
+Deliverables:
+- `pkg/middleware/memory.go` — loads AGENTS.md files, injects into system prompt via `SystemPromptExtensions`
+- Infra: `SystemPromptExtensions []string` added to `middleware.State`; `agent/agent.go` appends them to request
+
+### Phase 6B — FilesystemACLMiddleware
+
+Status: pending.
+
+Deliverables:
+- `pkg/middleware/filesystem_acl.go` — ordered allow/deny glob rules checked in `BeforeTool`
+- Operations: `OpRead | OpWrite | OpExecute`; default allow; configurable `WithDefaultDeny()`
+
+### Phase 6C — SkillsMiddleware
+
+Status: pending. Depends on Phase 6A infra.
+
+Deliverables:
+- `pkg/middleware/skills.go` — loads SKILL.md files, parses YAML frontmatter, injects skill directory into system prompt
+- Progressive disclosure: full content read on-demand via `read_file`
+
+### Phase 6D — HumanInTheLoopMiddleware
+
+Status: pending.
+
+Deliverables:
+- `pkg/middleware/human_in_loop.go` — `ApprovalGate` interface + `ChannelApprovalGate` for control-plane integration
+- `BeforeTool` blocks on configurable trigger conditions until approval/rejection arrives
+
+### Phase 6E — RubricMiddleware
+
+Status: deferred — requires structured output support first.
+
+Deliverables:
+- `pkg/middleware/rubric.go` — post-completion grader sub-agent, `needs_revision` retry loop up to N iterations
