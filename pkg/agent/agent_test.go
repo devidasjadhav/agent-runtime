@@ -364,6 +364,112 @@ func TestAgent_OffloadsLargeHumanMessage(t *testing.T) {
 	}
 }
 
+func TestAgent_CompleteFallsBackOnTransientProviderError(t *testing.T) {
+	primary := &testutil.FakeProvider{
+		Err: &model.ProviderError{Provider: "primary", Category: model.ErrorCategoryRateLimit, Message: "rate limited"},
+	}
+	fallback := &testutil.FakeProvider{
+		Responses: []testutil.FakeResponse{{Content: "fallback response", Stop: true}},
+	}
+
+	ag := agent.New(primary, tool.NewRegistry(),
+		agent.WithModelID("primary-model"),
+		agent.WithFallbackProvider(fallback, "fallback-model"),
+	)
+
+	events, err := ag.Run(context.Background(), agent.Input{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var gotFallbackEvent bool
+	var completed string
+	for evt := range events {
+		if evt.Type == "model_fallback" {
+			gotFallbackEvent = true
+		}
+		if evt.Type == "completed" {
+			completed = evt.Content
+		}
+	}
+
+	if !gotFallbackEvent {
+		t.Fatal("expected model_fallback event")
+	}
+	if completed != "fallback response" {
+		t.Fatalf("expected fallback response, got %q", completed)
+	}
+	if len(fallback.Requests) != 1 || fallback.Requests[0].Model != "fallback-model" {
+		t.Fatalf("expected fallback request with fallback model, got %#v", fallback.Requests)
+	}
+}
+
+func TestAgent_DoesNotFallbackOnValidationError(t *testing.T) {
+	primary := &testutil.FakeProvider{
+		Err: &model.ProviderError{Provider: "primary", Category: model.ErrorCategoryValidation, Message: "bad request"},
+	}
+	fallback := &testutil.FakeProvider{
+		Responses: []testutil.FakeResponse{{Content: "fallback response", Stop: true}},
+	}
+
+	ag := agent.New(primary, tool.NewRegistry(), agent.WithFallbackProvider(fallback, "fallback-model"))
+	events, err := ag.Run(context.Background(), agent.Input{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var gotError bool
+	for evt := range events {
+		if evt.Type == "error" {
+			gotError = true
+		}
+	}
+	if !gotError {
+		t.Fatal("expected error event")
+	}
+	if len(fallback.Requests) != 0 {
+		t.Fatalf("fallback should not be called for validation errors")
+	}
+}
+
+func TestAgent_StreamFallsBackOnTransientProviderError(t *testing.T) {
+	primary := &testutil.FakeProvider{
+		StreamErr: &model.ProviderError{Provider: "primary", Category: model.ErrorCategoryTimeout, Message: "timeout"},
+	}
+	fallback := &testutil.FakeProvider{
+		StreamChunks: []model.ModelChunk{{Type: "content", Content: "fallback stream"}, {Type: "done", Done: true}},
+	}
+
+	ag := agent.New(primary, tool.NewRegistry(), agent.WithFallbackProvider(fallback, "fallback-model"))
+	events, err := ag.RunStreaming(context.Background(), agent.Input{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+
+	var gotFallbackEvent bool
+	var completed string
+	for evt := range events {
+		if evt.Type == "model_fallback" {
+			gotFallbackEvent = true
+		}
+		if evt.Type == "completed" {
+			completed = evt.Content
+		}
+	}
+	if !gotFallbackEvent {
+		t.Fatal("expected model_fallback event")
+	}
+	if completed != "fallback stream" {
+		t.Fatalf("expected fallback stream completion, got %q", completed)
+	}
+}
+
 func TestAgent_Streaming(t *testing.T) {
 	result, _ := json.Marshal(map[string]string{"success": "true"})
 	writeTool := testutil.NewFakeTool("write_file", result)

@@ -12,6 +12,8 @@ type FakeProvider struct {
 	Responses    []FakeResponse
 	StreamChunks []model.ModelChunk
 	Requests     []model.ModelRequest
+	Err          error
+	StreamErr    error
 	callIndex    int
 }
 
@@ -23,6 +25,9 @@ type FakeResponse struct {
 
 func (f *FakeProvider) Complete(_ context.Context, req model.ModelRequest) (*model.ModelResponse, error) {
 	f.Requests = append(f.Requests, req)
+	if f.Err != nil {
+		return nil, f.Err
+	}
 	if f.callIndex >= len(f.Responses) {
 		return &model.ModelResponse{
 			Message:    model.Message{Role: model.RoleAssistant, Content: "done"},
@@ -51,6 +56,10 @@ func (f *FakeProvider) Complete(_ context.Context, req model.ModelRequest) (*mod
 }
 
 func (f *FakeProvider) Stream(ctx context.Context, req model.ModelRequest) (<-chan model.ModelChunk, error) {
+	if f.StreamErr != nil {
+		f.Requests = append(f.Requests, req)
+		return nil, f.StreamErr
+	}
 	if f.StreamChunks != nil {
 		f.Requests = append(f.Requests, req)
 		ch := make(chan model.ModelChunk, len(f.StreamChunks))

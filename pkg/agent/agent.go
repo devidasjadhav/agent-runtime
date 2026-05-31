@@ -15,16 +15,18 @@ import (
 )
 
 type Agent struct {
-	provider      model.Provider
-	registry      *tool.Registry
-	middlewares   middleware.Chain
-	modelID       string
-	maxTokens     int
-	systemPrompt  string
-	maxIterations int
-	resultStore   ResultStore
-	offloadLimit  int
-	messageLimit  int
+	provider         model.Provider
+	fallbackProvider model.Provider
+	registry         *tool.Registry
+	middlewares      middleware.Chain
+	modelID          string
+	fallbackModelID  string
+	maxTokens        int
+	systemPrompt     string
+	maxIterations    int
+	resultStore      ResultStore
+	offloadLimit     int
+	messageLimit     int
 }
 
 type ResultStore interface {
@@ -35,6 +37,13 @@ type Option func(*Agent)
 
 func WithModelID(id string) Option {
 	return func(a *Agent) { a.modelID = id }
+}
+
+func WithFallbackProvider(provider model.Provider, modelID string) Option {
+	return func(a *Agent) {
+		a.fallbackProvider = provider
+		a.fallbackModelID = modelID
+	}
 }
 
 func WithMaxTokens(n int) Option {
@@ -149,10 +158,13 @@ func (a *Agent) Run(ctx context.Context, input Input) (<-chan Event, error) {
 
 			a.emit(ch, Event{Type: "model_call_start"})
 
-			resp, err := a.provider.Complete(ctx, req)
+			resp, fallbackUsed, err := a.completeWithFallback(ctx, req)
 			if err != nil {
 				a.emit(ch, Event{Type: "error", Content: fmt.Sprintf("model error: %s", err)})
 				return
+			}
+			if fallbackUsed {
+				a.emit(ch, Event{Type: "model_fallback", Content: "primary model failed; used fallback model"})
 			}
 
 			a.emit(ch, Event{
@@ -248,10 +260,13 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 				MaxTokens:    a.maxTokens,
 			}
 
-			stream, err := a.provider.Stream(ctx, req)
+			stream, fallbackUsed, err := a.streamWithFallback(ctx, req)
 			if err != nil {
 				a.emit(ch, Event{Type: "error", Content: fmt.Sprintf("stream error: %s", err)})
 				return
+			}
+			if fallbackUsed {
+				a.emit(ch, Event{Type: "model_fallback", Content: "primary model failed; used fallback model"})
 			}
 
 			var contentBuf string
@@ -343,6 +358,38 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 	}()
 
 	return ch, nil
+}
+
+func (a *Agent) completeWithFallback(ctx context.Context, req model.ModelRequest) (*model.ModelResponse, bool, error) {
+	resp, err := a.provider.Complete(ctx, req)
+	if err == nil || a.fallbackProvider == nil || !model.IsFallbackEligible(err) {
+		return resp, false, err
+	}
+	fallbackReq := req
+	if a.fallbackModelID != "" {
+		fallbackReq.Model = a.fallbackModelID
+	}
+	resp, fallbackErr := a.fallbackProvider.Complete(ctx, fallbackReq)
+	if fallbackErr != nil {
+		return nil, true, fmt.Errorf("primary model failed: %w; fallback model failed: %w", err, fallbackErr)
+	}
+	return resp, true, nil
+}
+
+func (a *Agent) streamWithFallback(ctx context.Context, req model.ModelRequest) (<-chan model.ModelChunk, bool, error) {
+	stream, err := a.provider.Stream(ctx, req)
+	if err == nil || a.fallbackProvider == nil || !model.IsFallbackEligible(err) {
+		return stream, false, err
+	}
+	fallbackReq := req
+	if a.fallbackModelID != "" {
+		fallbackReq.Model = a.fallbackModelID
+	}
+	stream, fallbackErr := a.fallbackProvider.Stream(ctx, fallbackReq)
+	if fallbackErr != nil {
+		return nil, true, fmt.Errorf("primary model failed: %w; fallback model failed: %w", err, fallbackErr)
+	}
+	return stream, true, nil
 }
 
 func (a *Agent) executeTool(ctx context.Context, tc model.ToolCall) tool.Result {

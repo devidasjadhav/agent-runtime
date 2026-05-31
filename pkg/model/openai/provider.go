@@ -3,7 +3,6 @@ package openai
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/openai/openai-go"
@@ -28,7 +27,7 @@ func (p *Provider) Complete(ctx context.Context, req apimodel.ModelRequest) (*ap
 	params := p.buildParams(req)
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return nil, fmt.Errorf("openai complete: %w", err)
+		return nil, wrapProviderError(err)
 	}
 	return p.parseResponse(resp), nil
 }
@@ -74,7 +73,7 @@ func (p *Provider) Stream(ctx context.Context, req apimodel.ModelRequest) (<-cha
 		}
 
 		if err := stream.Err(); err != nil {
-			ch <- apimodel.ModelChunk{Type: "error", Content: err.Error()}
+			ch <- apimodel.ModelChunk{Type: "error", Content: wrapProviderError(err).Error()}
 			return
 		}
 
@@ -82,6 +81,15 @@ func (p *Provider) Stream(ctx context.Context, req apimodel.ModelRequest) (<-cha
 	}()
 
 	return ch, nil
+}
+
+func wrapProviderError(err error) error {
+	return &apimodel.ProviderError{
+		Provider: "openai-compatible",
+		Category: apimodel.ErrorCategoryOf(err),
+		Message:  err.Error(),
+		Err:      err,
+	}
 }
 
 func (p *Provider) buildParams(req apimodel.ModelRequest) openai.ChatCompletionNewParams {

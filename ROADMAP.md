@@ -91,6 +91,8 @@ Remaining hardening:
 
 ## Phase 2: Provider Layer And Fallbacks
 
+Status: foundation implemented.
+
 Goal: make OpenAI-compatible support production-grade, then add native providers.
 
 ### 1. Provider Profiles
@@ -100,6 +102,8 @@ Deliverables:
 - Profiles for DeepSeek, OpenAI, custom OpenAI-compatible base URLs.
 - Default model per profile.
 - Model quirks in one place.
+
+Status: complete for DeepSeek, OpenAI, and custom OpenAI-compatible profile construction.
 
 ### 2. Error Normalization
 
@@ -113,12 +117,16 @@ Deliverables:
   - transient provider failure
   - terminal provider failure
 
+Status: complete for shared categories and OpenAI-compatible error wrapping.
+
 ### 3. Fallback Middleware
 
 Deliverables:
 
 - Retry/fallback to secondary model on configured transient errors.
 - Preserve event stream visibility when fallback occurs.
+
+Status: complete for complete calls and stream startup failures. Mid-stream fallback is intentionally unsupported for now.
 
 ### 4. Native Providers
 
@@ -127,6 +135,8 @@ Deliverables:
 - Anthropic provider.
 - Google provider.
 - Provider-specific reasoning knobs.
+
+Status: pending.
 
 ## Phase 3: Sandbox Providers
 

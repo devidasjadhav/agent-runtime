@@ -33,9 +33,12 @@ func main() {
 		log.Fatal("Usage: demo -task \"your task description\" [-dir /path/to/workdir] [-model gpt-4o] [-stream true]")
 	}
 
-	apiKey, baseURL, defaultModel, providerName := resolveProviderConfig()
+	profile, err := model.ResolveProviderProfileFromEnv()
+	if err != nil {
+		log.Fatal(err)
+	}
 	if *modelID == "" {
-		*modelID = defaultModel
+		*modelID = profile.DefaultModel
 	}
 
 	dir := *sandboxDir
@@ -71,10 +74,10 @@ Working directory: %s
 Complete the user's task using the available tools. After completing the task, provide a brief summary of what you did.`, absDir)
 
 	providerOpts := []option.RequestOption{}
-	if baseURL != "" {
-		providerOpts = append(providerOpts, option.WithBaseURL(baseURL))
+	if profile.BaseURL != "" {
+		providerOpts = append(providerOpts, option.WithBaseURL(profile.BaseURL))
 	}
-	provider := modelopenai.NewProvider(apiKey, providerOpts...)
+	provider := modelopenai.NewProvider(profile.APIKey, providerOpts...)
 
 	ag := agent.New(provider, registry,
 		agent.WithModelID(*modelID),
@@ -89,7 +92,7 @@ Complete the user's task using the available tools. After completing the task, p
 	fmt.Printf("=== Agent Demo ===\n")
 	fmt.Printf("Task: %s\n", *task)
 	fmt.Printf("Sandbox: %s\n", absDir)
-	fmt.Printf("Provider: %s\n", providerName)
+	fmt.Printf("Provider: %s\n", profile.Name)
 	fmt.Printf("Model: %s\n", *modelID)
 	fmt.Printf("Mode: %s\n\n", map[bool]string{true: "streaming", false: "complete"}[*stream])
 
@@ -109,19 +112,6 @@ Complete the user's task using the available tools. After completing the task, p
 
 	fmt.Printf("\n=== Sandbox contents ===\n")
 	printDir(absDir, "")
-}
-
-func resolveProviderConfig() (apiKey string, baseURL string, defaultModel string, providerName string) {
-	if key := os.Getenv("DEEPSEEK_API_KEY"); key != "" {
-		return key, "https://api.deepseek.com", "deepseek-v4-flash", "deepseek"
-	}
-
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		return key, "", "gpt-4o", "openai"
-	}
-
-	log.Fatal("DEEPSEEK_API_KEY or OPENAI_API_KEY environment variable is required")
-	return "", "", "", ""
 }
 
 func runStreaming(ctx context.Context, ag *agent.Agent, input agent.Input) {
