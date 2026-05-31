@@ -83,9 +83,23 @@ Deliverables:
 
 Status: complete for large user messages.
 
-Remaining hardening:
+### 4. Retention/Cleanup Policy
 
-- Add retention/cleanup policy.
+Deliverables:
+
+- Evict oldest offloaded files once tracked count exceeds a configurable limit.
+- No unbounded accumulation of `/large_tool_results/` files during long runs.
+
+Status: complete. `pkg/agent/retention.go` implements `RetentionStore`:
+- Wraps any `ResultStore`; tracks written paths in an ordered in-memory list.
+- When `len(written) > MaxFiles`, evicts oldest via injected `deleter` func.
+- `NewSandboxRetentionStore` is the production constructor: deleter calls `rm -f <path>` via `sandbox.Exec`.
+- `maxFiles=0` disables eviction (backward-compatible default).
+- 5 unit tests covering eviction order, at-limit, zero-max, and exact-limit cases.
+- Wired into `cmd/demo` with `maxFiles=20`.
+
+Remaining:
+
 - Preserve raw execute output before tool-level truncation if needed.
 - Revisit local shell isolation; shell commands can still address host absolute paths in dev mode.
 
@@ -130,13 +144,7 @@ Status: complete for complete calls and stream startup failures. Mid-stream fall
 
 ### 4. Native Providers
 
-Deliverables:
-
-- Anthropic provider.
-- Google provider.
-- Provider-specific reasoning knobs.
-
-Status: pending.
+Status: skipped. Sticking with DeepSeek via the OpenAI-compatible provider (verified end-to-end). Native Anthropic/Google providers deferred indefinitely.
 
 ## Phase 3: Sandbox Providers
 

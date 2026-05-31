@@ -79,6 +79,8 @@ Complete the user's task using the available tools. After completing the task, p
 	}
 	provider := modelopenai.NewProvider(profile.APIKey, providerOpts...)
 
+	retentionStore := agent.NewSandboxRetentionStore(sbx, sbx, 20)
+
 	ag := agent.New(provider, registry,
 		agent.WithModelID(*modelID),
 		agent.WithSystemPrompt(systemPrompt),
@@ -86,7 +88,7 @@ Complete the user's task using the available tools. After completing the task, p
 		agent.WithMaxTokens(4096),
 		agent.WithMiddleware(middleware.NewCallLimit(50)),
 		agent.WithMiddleware(middleware.NewErrorHandler()),
-		agent.WithResultOffload(sbx, 80_000),
+		agent.WithResultOffload(retentionStore, 80_000),
 	)
 
 	fmt.Printf("=== Agent Demo ===\n")
