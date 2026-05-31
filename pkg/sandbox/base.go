@@ -129,7 +129,9 @@ func (s *BaseSandbox) runPythonJSON(ctx context.Context, script string, args map
 	if err != nil {
 		return err
 	}
-	cmd := fmt.Sprintf("python3 - <<'PY'\nimport json\nARGS = json.loads(%s)\n%s\nPY", strconv.Quote(string(argsJSON)), script)
+	fullScript := fmt.Sprintf("import json\nARGS = json.loads(%s)\n%s", strconv.Quote(string(argsJSON)), script)
+	encoded := base64.StdEncoding.EncodeToString([]byte(fullScript))
+	cmd := fmt.Sprintf("echo %s | base64 -d | python3", encoded)
 	result, err := s.Exec(ctx, cmd, nil)
 	if err != nil {
 		return err
