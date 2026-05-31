@@ -16,21 +16,24 @@ import (
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/middleware"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/model"
 	modelopenai "github.com/anomalyco/open-swe/agent-runtime/pkg/model/openai"
+	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox/local"
+	sshsandbox "github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox/ssh"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool/builtin"
 )
 
 func main() {
 	task := flag.String("task", "", "Task for the agent to perform")
-	sandboxDir := flag.String("dir", "", "Working directory for the sandbox (default: temp dir)")
+	sandboxDir := flag.String("dir", "", "Working directory for the sandbox (default: temp dir, ignored for ssh)")
+	sandboxType := flag.String("sandbox", "local", "Sandbox type: local or ssh (ssh reads SSH_HOST/SSH_USER/SSH_PASSWORD/SSH_KEY_PATH/SSH_DIR from env)")
 	modelID := flag.String("model", "", "Model ID to use (default: deepseek-chat with DEEPSEEK_API_KEY, otherwise gpt-4o)")
 	stream := flag.Bool("stream", true, "Use streaming mode")
 	maxIter := flag.Int("max-iter", 20, "Maximum agent loop iterations")
 	flag.Parse()
 
 	if *task == "" {
-		log.Fatal("Usage: demo -task \"your task description\" [-dir /path/to/workdir] [-model gpt-4o] [-stream true]")
+		log.Fatal("Usage: demo -task \"...\" [-sandbox local|ssh] [-dir /path] [-model id] [-stream true]")
 	}
 
 	profile, err := model.ResolveProviderProfileFromEnv()
@@ -41,19 +44,37 @@ func main() {
 		*modelID = profile.DefaultModel
 	}
 
-	dir := *sandboxDir
-	if dir == "" {
-		tmp, err := os.MkdirTemp("", "agent-demo-*")
-		if err != nil {
-			log.Fatalf("create temp dir: %v", err)
-		}
-		dir = tmp
-		defer os.RemoveAll(tmp)
-	}
+	var sbx sandbox.Sandbox
+	var displayDir string
 
-	sbx, err := local.New(dir)
-	if err != nil {
-		log.Fatalf("create sandbox: %v", err)
+	switch *sandboxType {
+	case "ssh":
+		s, err := sshsandbox.NewFromEnv()
+		if err != nil {
+			log.Fatalf("create ssh sandbox: %v", err)
+		}
+		sbx = s
+		displayDir = os.Getenv("SSH_DIR")
+		if displayDir == "" {
+			displayDir = "(remote home)"
+		}
+	default:
+		dir := *sandboxDir
+		if dir == "" {
+			tmp, err := os.MkdirTemp("", "agent-demo-*")
+			if err != nil {
+				log.Fatalf("create temp dir: %v", err)
+			}
+			dir = tmp
+			defer os.RemoveAll(tmp)
+		}
+		s, err := local.New(dir)
+		if err != nil {
+			log.Fatalf("create sandbox: %v", err)
+		}
+		absDir, _ := filepath.Abs(dir)
+		displayDir = absDir
+		sbx = s
 	}
 	defer sbx.Close(context.Background())
 
@@ -66,12 +87,11 @@ func main() {
 	registry.Register(builtin.NewGlobTool(sbx))
 	registry.Register(builtin.NewGrepTool(sbx))
 
-	absDir, _ := filepath.Abs(dir)
 	systemPrompt := fmt.Sprintf(`You are an AI coding agent. You can execute shell commands, list directories, search files, read files, write files, and edit files.
 
 Working directory: %s
 
-Complete the user's task using the available tools. After completing the task, provide a brief summary of what you did.`, absDir)
+Complete the user's task using the available tools. After completing the task, provide a brief summary of what you did.`, displayDir)
 
 	providerOpts := []option.RequestOption{}
 	if profile.BaseURL != "" {
@@ -93,7 +113,7 @@ Complete the user's task using the available tools. After completing the task, p
 
 	fmt.Printf("=== Agent Demo ===\n")
 	fmt.Printf("Task: %s\n", *task)
-	fmt.Printf("Sandbox: %s\n", absDir)
+	fmt.Printf("Sandbox: %s (%s)\n", *sandboxType, displayDir)
 	fmt.Printf("Provider: %s\n", profile.Name)
 	fmt.Printf("Model: %s\n", *modelID)
 	fmt.Printf("Mode: %s\n\n", map[bool]string{true: "streaming", false: "complete"}[*stream])
@@ -112,8 +132,10 @@ Complete the user's task using the available tools. After completing the task, p
 		runComplete(ctx, ag, input)
 	}
 
-	fmt.Printf("\n=== Sandbox contents ===\n")
-	printDir(absDir, "")
+	if *sandboxType == "local" {
+		fmt.Printf("\n=== Sandbox contents ===\n")
+		printDir(displayDir, "")
+	}
 }
 
 func runStreaming(ctx context.Context, ag *agent.Agent, input agent.Input) {
