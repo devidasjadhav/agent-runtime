@@ -12,10 +12,11 @@ type ToolSchema struct {
 }
 
 type ToolPropertySchema struct {
-	Type        string   `json:"type"`
-	Description string   `json:"description,omitempty"`
-	Enum        []string `json:"enum,omitempty"`
-	Default     any      `json:"default,omitempty"`
+	Type        string               `json:"type"`
+	Description string               `json:"description,omitempty"`
+	Enum        []string             `json:"enum,omitempty"`
+	Default     any                  `json:"default,omitempty"`
+	Items       *ToolPropertySchema  `json:"items,omitempty"`
 }
 
 type ToolDefinition struct {

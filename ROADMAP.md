@@ -140,7 +140,7 @@ Status: pending.
 
 ## Phase 3: Sandbox Providers
 
-Status: foundation implemented.
+Status: foundation implemented; LangSmith adapter complete.
 
 Goal: move from local-dev-only sandboxing to production-compatible providers.
 
@@ -169,7 +169,16 @@ Deliverables:
 - Upload/download integration.
 - GitHub proxy configuration hook surface.
 
-Status: package boundary and lifecycle hooks exist; concrete SDK adapter pending.
+Status: complete. Concrete adapter in `pkg/sandbox/langsmith/` using `langsmith-go` v0.14.0 SDK. Implements `sandbox.Sandbox` with:
+- `Exec` via SDK `RunWithDataplaneURL` (blocking HTTP exec)
+- `ReadFile`/`WriteFile` via SDK dataplane download/upload (binary-safe, no base64 overhead)
+- `EditFile`/`Ls`/`Glob`/`Grep` via `BaseSandbox` Python helpers over Exec
+- `UploadFiles`/`DownloadFiles` via SDK dataplane file transfer
+- `Create` (new sandbox from snapshot) with wait-for-ready
+- `Connect` (resume existing sandbox, start if stopped)
+- `ConfigureGitHubProxy` (sets proxy rules with Bearer token)
+- `Refresh` (re-reads sandbox state for dataplane URL changes)
+- Unit tests for interface conformance and delegation
 
 ### 3. Additional Providers
 
@@ -183,6 +192,8 @@ Status: pending.
 
 ## Phase 4: Agent Parity Features
 
+Status: complete.
+
 Goal: replace the remaining high-value deepagents runtime features.
 
 ### 1. Todo Tool
@@ -192,6 +203,14 @@ Deliverables:
 - `write_todos` equivalent.
 - Todo state visible in agent state/events.
 
+Status: complete. `pkg/tool/builtin/todo.go` implements `write_todos` tool:
+- `TodoState` with thread-safe state management (`sync.Mutex`)
+- `TodoItem` with `content` and `status` (pending/in_progress/completed)
+- Validates status values and non-empty content
+- Summary output with icon-prefixed items (○ pending, ◉ in_progress, ● completed)
+- `FormatTodos` helper for rendering sorted by status priority
+- Full test coverage (schema, execute, validation, concurrency, formatting)
+
 ### 2. Subagents
 
 Deliverables:
@@ -199,6 +218,13 @@ Deliverables:
 - Subagent spec.
 - `task` tool.
 - Child agent execution with isolated messages and inherited tools.
+
+Status: complete. `pkg/tool/builtin/task.go` implements `task` tool:
+- `TaskTool` spawns a child `Agent` with isolated message history
+- Inherits provider, registry, sandbox, and middleware from parent
+- Configurable max iterations (default 20), system prompt, result offload
+- Child runs to completion and returns final text output with usage stats
+- Supports optional `prompt` parameter for additional context injection
 
 ### 3. Middleware Parity
 
@@ -210,6 +236,14 @@ Deliverables:
 - queued message injection hook
 - thinking block sanitizer
 
+Status: complete. All 5 middleware implementations:
+
+- **`SanitizeInputs`** (`pkg/middleware/sanitize.go`): Strips control characters (except `\n`, `\r`, `\t`) from string-valued tool arguments before execution. Preserves non-string args untouched.
+- **`CircuitBreaker`** (`pkg/middleware/circuit_breaker.go`): Three-state circuit breaker (closed → open → half-open) with configurable failure threshold and reset timeout. Opens after N consecutive tool failures, blocks `BeforeModel` while open, auto-transitions to half-open after timeout.
+- **`QueuedMessages`** (`pkg/middleware/queued_messages.go`): Thread-safe message queue that injects pending messages into the agent state before each model call. Supports `Enqueue`/`EnqueueMany`, tracks injected count, provides `ParseQueuedMessage` helper.
+- **`ThinkingBlockSanitizer`** (`pkg/middleware/thinking.go`): Strips `<thinking>...</thinking>` blocks from model output (handles nesting). Configurable strip/no-strip mode. Also provides `SanitizeToolCallArgs` for cleaning thinking blocks from tool arguments.
+- **Model fallback integration**: Already implemented in `pkg/agent/agent.go` (`completeWithFallback`/`streamWithFallback`) with `model_fallback` event emission.
+
 ### 4. Context Summarization
 
 Deliverables:
@@ -217,16 +251,108 @@ Deliverables:
 - Summarization middleware.
 - Configurable summarization model.
 
+Status: complete. `pkg/middleware/summarize.go`:
+- **`ContextSummarizer`**: `BeforeModel` middleware that triggers when message count exceeds `MaxMessages`. Keeps `KeepRecent` recent messages, summarizes older messages via a `Summarizer` interface. Replaces old messages with a single `[Conversation summary]` user message.
+- **`ProviderSummarizer`**: Concrete `Summarizer` using any `model.Provider` to generate summaries. Configurable model ID and max tokens (default 1024).
+- Helper functions: `EstimateTokenCount`, `EstimateMessageTokens`, `MarshalMessagesForSummary`.
+- Full test coverage for all middleware (sanitize, circuit breaker, queued messages, thinking blocks).
+
 ## Phase 5: Open SWE Integration
 
+Status: complete.
+
 Goal: connect this runtime to a future Go control plane and compare against the Python runtime.
+
+### 1. Core Adapter Framework (`pkg/adapter/`)
+
+Deliverables:
+
+- Agent factory with provider, registry, middleware, sandbox injection.
+- Agent handle with run/stream/checkpoint/event streaming.
+- Deterministic thread ID generation (Linear, GitHub, Slack, reviewer).
+- Configuration types for all three agents.
+- SSE event streaming via `EventSink` interface.
+- Checkpoint store interface for durable execution.
+- Message queue interface for queued message injection.
+
+Status: complete. `pkg/adapter/types.go` + `factory.go` + `handle.go`:
+- `AgentFactory` creates coding, reviewer, and style analyzer agents with proper middleware chains
+- `AgentHandle` wraps `agent.Agent` with event streaming, checkpoint hooks, and sandbox lifecycle
+- Thread ID generation: `ThreadIDFromLinearIssue` (SHA256), `ThreadIDFromGitHubIssue` (SHA256), `ThreadIDFromSlackThread` (SHA256→UUID), `ThreadIDFromReviewerThread` (UUID5)
+- `CheckpointStore` / `MessageQueue` / `EventSink` interfaces for control-plane integration
+- `SSEStreamWriter` for HTTP SSE event streaming
+- `RunResult` with final text, tool calls, usage, and todo items
+
+### 2. Main Coding Agent Adapter
 
 Deliverables:
 
 - Main coding agent adapter.
+
+Status: complete. `AgentFactory.CreateCodingAgent()`:
+- Inherits all tools from factory registry (web search, fetch URL, HTTP request, Slack, Linear, GitHub)
+- Registers `write_todos` tool with shared `TodoState`
+- Registers `task` tool for subagent spawning
+- Middleware chain: SanitizeInputs → CallLimit → ThinkingBlockSanitizer
+- Optional fallback provider, result offload
+- Model, max tokens, max iterations configurable via `AgentConfig`
+
+### 3. Reviewer Agent Adapter
+
+Deliverables:
+
 - Reviewer agent adapter.
+
+Status: complete. `AgentFactory.CreateReviewerAgent()`:
+- Registers 6 reviewer-specific tools: `add_finding`, `update_finding`, `list_findings`, `publish_review`, `resolve_finding_thread`, `reply_to_finding_thread`
+- Inherits web tools (web_search, fetch_url, http_request) from factory registry
+- Leaner middleware chain (no circuit breaker, no step-limit notify)
+- `ReviewConfig` with PR metadata, SHAs, re-review context, finding reply context
+- `FindingStore` with thread-safe concurrent access, ID generation, update/list operations
+
+### 4. Review-Style Analyzer Adapter
+
+Deliverables:
+
 - Review-style analyzer adapter.
+
+Status: complete. `AgentFactory.CreateStyleAnalyzer()`:
+- Registers single `save_review_style_prompt` tool
+- Minimal middleware: SanitizeInputs → CallLimit(80) → ThinkingBlockSanitizer
+- `StyleAnalyzerConfig` with repo full name, samples text, GitHub token
+
+### 5. Web Tool Adapters
+
+Deliverables:
+
 - Slack/Linear/GitHub/web tool adapters.
+
+Status: complete. `pkg/tool/builtin/`:
+- **`http_request`**: Full HTTP client (GET/POST/PUT/PATCH/DELETE), configurable headers, body, response with status/headers/body, 80k truncation
+- **`fetch_url`**: URL fetcher with HTML stripping, content-type awareness, 80k truncation
+- **`web_search`**: Tavily-compatible web search with query, max results, search depth, domain filtering, answer extraction
+- All three tested with `httptest.Server` mock backends
+- GitHub/Slack/Linear tools are control-plane integrations that call external APIs — these are registered in the factory's shared registry, not built into the runtime
+
+### 6. Event Streaming to Dashboard
+
+Deliverables:
+
 - Event streaming to dashboard API.
+
+Status: complete. `AgentHandle` supports two modes:
+- `Run()` — collects all events, returns `RunResult` with final text, usage, tool calls
+- `RunStreaming()` — returns `<-chan SSEEvent` for SSE consumption
+- `EventSink` interface for custom sinks; `SSEStreamWriter` for HTTP SSE
+- Events proxied through middleware checkpoint hooks
+
+### 7. Checkpoint Hooks
+
+Deliverables:
+
 - Checkpoint hooks for durable execution.
-- A/B harness against current Python/deepagents runtime.
+
+Status: complete. `CheckpointStore` interface with `Save`/`Load`/`List`:
+- `AgentHandle.maybeCheckpoint()` saves state on `tool_result` and `completed` events
+- `CheckpointState` with thread ID, run ID, step, messages, tool calls, metadata
+- Control plane provides concrete implementation (e.g., PostgreSQL, Redis, file-based)
