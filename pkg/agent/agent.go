@@ -150,7 +150,7 @@ func (a *Agent) Run(ctx context.Context, input Input) (<-chan Event, error) {
 
 			req := model.ModelRequest{
 				Model:        a.modelID,
-				SystemPrompt: a.systemPrompt,
+				SystemPrompt: buildSystemPrompt(a.systemPrompt, state.SystemPromptExtensions),
 				Messages:     messages,
 				Tools:        toolDefs,
 				MaxTokens:    a.maxTokens,
@@ -254,7 +254,7 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 
 			req := model.ModelRequest{
 				Model:        a.modelID,
-				SystemPrompt: a.systemPrompt,
+				SystemPrompt: buildSystemPrompt(a.systemPrompt, state.SystemPromptExtensions),
 				Messages:     messages,
 				Tools:        toolDefs,
 				MaxTokens:    a.maxTokens,
@@ -587,6 +587,18 @@ func convertToolCalls(tcs []model.ToolCall) []middleware.ToolCall {
 		}
 	}
 	return result
+}
+
+func buildSystemPrompt(base string, extensions []string) string {
+	if len(extensions) == 0 {
+		return base
+	}
+	parts := make([]string, 0, 1+len(extensions))
+	if base != "" {
+		parts = append(parts, base)
+	}
+	parts = append(parts, extensions...)
+	return strings.Join(parts, "\n\n")
 }
 
 func truncate(s string, maxLen int) string {

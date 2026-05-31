@@ -15,9 +15,10 @@ type Middleware interface {
 }
 
 type State struct {
-	Messages  []any
-	Metadata  map[string]any
-	ToolCalls int
+	Messages               []any
+	Metadata               map[string]any
+	ToolCalls              int
+	SystemPromptExtensions []string // appended to system prompt by the agent loop
 }
 
 type ModelResult struct {
