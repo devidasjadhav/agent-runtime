@@ -56,12 +56,15 @@ func main() {
 
 	registry := tool.NewRegistry()
 	registry.Register(builtin.NewExecuteTool(sbx))
+	registry.Register(builtin.NewLsTool(sbx))
 	registry.Register(builtin.NewReadFileTool(sbx))
 	registry.Register(builtin.NewWriteFileTool(sbx))
 	registry.Register(builtin.NewEditFileTool(sbx))
+	registry.Register(builtin.NewGlobTool(sbx))
+	registry.Register(builtin.NewGrepTool(sbx))
 
 	absDir, _ := filepath.Abs(dir)
-	systemPrompt := fmt.Sprintf(`You are an AI coding agent. You can execute shell commands, read files, write files, and edit files.
+	systemPrompt := fmt.Sprintf(`You are an AI coding agent. You can execute shell commands, list directories, search files, read files, write files, and edit files.
 
 Working directory: %s
 

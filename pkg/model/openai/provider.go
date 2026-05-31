@@ -57,6 +57,7 @@ func (p *Provider) Stream(ctx context.Context, req apimodel.ModelRequest) (<-cha
 				if tc.Function.Name != "" {
 					ch <- apimodel.ModelChunk{
 						Type:       "tool_call_start",
+						ToolIndex:  int(tc.Index),
 						ToolCallID: tc.ID,
 						ToolName:   tc.Function.Name,
 					}
@@ -64,6 +65,7 @@ func (p *Provider) Stream(ctx context.Context, req apimodel.ModelRequest) (<-cha
 				if tc.Function.Arguments != "" {
 					ch <- apimodel.ModelChunk{
 						Type:       "tool_call_args",
+						ToolIndex:  int(tc.Index),
 						ToolCallID: tc.ID,
 						ToolArgs:   tc.Function.Arguments,
 					}

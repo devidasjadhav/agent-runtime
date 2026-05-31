@@ -234,9 +234,7 @@ func TestAgent_UnknownTool(t *testing.T) {
 	if toolResultContent == "" {
 		t.Fatal("expected tool result with error")
 	}
-	var parsed map[string]string
-	json.Unmarshal([]byte(toolResultContent), &parsed)
-	if parsed["error"] == "" {
+	if toolResultContent != "Error: unknown tool: nonexistent_tool" {
 		t.Fatal("expected error in tool result for unknown tool")
 	}
 }
@@ -277,5 +275,56 @@ func TestAgent_Streaming(t *testing.T) {
 
 	if !gotContent {
 		t.Fatal("expected content in streaming mode")
+	}
+}
+
+func TestAgent_StreamingInterleavedToolCalls(t *testing.T) {
+	writeResult, _ := json.Marshal(map[string]string{"ok": "write"})
+	executeResult, _ := json.Marshal(map[string]string{"ok": "execute"})
+	writeTool := testutil.NewFakeTool("write_file", writeResult)
+	executeTool := testutil.NewFakeTool("execute", executeResult)
+
+	provider := &testutil.FakeProvider{
+		StreamChunks: []model.ModelChunk{
+			{Type: "tool_call_start", ToolIndex: 0, ToolCallID: "call_write", ToolName: "write_file"},
+			{Type: "tool_call_start", ToolIndex: 1, ToolCallID: "call_exec", ToolName: "execute"},
+			{Type: "tool_call_args", ToolIndex: 0, ToolCallID: "call_write", ToolArgs: `{"file_path":"a.txt",`},
+			{Type: "tool_call_args", ToolIndex: 1, ToolCallID: "call_exec", ToolArgs: `{"command":"`},
+			{Type: "tool_call_args", ToolIndex: 0, ToolCallID: "call_write", ToolArgs: `"content":"hello"}`},
+			{Type: "tool_call_args", ToolIndex: 1, ToolCallID: "call_exec", ToolArgs: `cat a.txt"}`},
+			{Type: "done", Done: true},
+		},
+	}
+
+	registry := tool.NewRegistry()
+	registry.Register(writeTool)
+	registry.Register(executeTool)
+
+	ag := agent.New(provider, registry, agent.WithMaxIterations(1))
+	events, err := ag.RunStreaming(context.Background(), agent.Input{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "test"}},
+	})
+	if err != nil {
+		t.Fatalf("RunStreaming: %v", err)
+	}
+
+	var calls []agent.ToolCallEvent
+	for evt := range events {
+		if evt.Type == "tool_executing" && evt.ToolCall != nil {
+			calls = append(calls, *evt.ToolCall)
+		}
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 executed tool calls, got %d", len(calls))
+	}
+	if calls[0].Name != "write_file" || calls[0].Args != `{"file_path":"a.txt","content":"hello"}` {
+		t.Fatalf("unexpected first call: %#v", calls[0])
+	}
+	if calls[1].Name != "execute" || calls[1].Args != `{"command":"cat a.txt"}` {
+		t.Fatalf("unexpected second call: %#v", calls[1])
+	}
+	if writeTool.CallCount() != 1 || executeTool.CallCount() != 1 {
+		t.Fatalf("expected both tools to run once, got write=%d execute=%d", writeTool.CallCount(), executeTool.CallCount())
 	}
 }

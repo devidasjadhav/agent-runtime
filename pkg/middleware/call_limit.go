@@ -2,8 +2,9 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+
+	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
 )
 
 type CallLimit struct {
@@ -29,7 +30,7 @@ func (m *CallLimit) BeforeTool(_ context.Context, call *ToolCall) (*ToolCall, er
 	return call, nil
 }
 
-func (m *CallLimit) AfterTool(_ context.Context, _ *ToolCall, result json.RawMessage) (json.RawMessage, error) {
+func (m *CallLimit) AfterTool(_ context.Context, _ *ToolCall, result tool.Result) (tool.Result, error) {
 	return result, nil
 }
 
@@ -49,7 +50,7 @@ func (m *ErrorHandler) BeforeTool(_ context.Context, call *ToolCall) (*ToolCall,
 	return call, nil
 }
 
-func (m *ErrorHandler) AfterTool(_ context.Context, call *ToolCall, result json.RawMessage) (json.RawMessage, error) {
+func (m *ErrorHandler) AfterTool(_ context.Context, call *ToolCall, result tool.Result) (tool.Result, error) {
 	return result, nil
 }
 
@@ -57,9 +58,9 @@ type ToolErrorResult struct {
 	Error string `json:"error"`
 }
 
-func WrapToolError(callName string, err error) json.RawMessage {
-	b, _ := json.Marshal(map[string]any{
-		"error": fmt.Sprintf("tool %s failed: %s", callName, err.Error()),
-	})
-	return b
+func WrapToolError(callName string, err error) tool.Result {
+	return tool.Result{
+		Content: fmt.Sprintf("Error: tool %s failed: %s", callName, err.Error()),
+		Error:   true,
+	}
 }

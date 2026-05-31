@@ -85,6 +85,13 @@ type ToolResultEvent struct {
 	Error      string `json:"error,omitempty"`
 }
 
+type streamToolCall struct {
+	ID        string
+	Name      string
+	Arguments string
+	announced bool
+}
+
 func (a *Agent) Run(ctx context.Context, input Input) (<-chan Event, error) {
 	ch := make(chan Event, 128)
 
@@ -168,13 +175,13 @@ func (a *Agent) Run(ctx context.Context, input Input) (<-chan Event, error) {
 					ToolResult: &ToolResultEvent{
 						ToolCallID: tc.ID,
 						Name:       tc.Name,
-						Output:     string(result),
+						Output:     result.Content,
 					},
 				})
 
 				messages = append(messages, model.Message{
 					Role:       model.RoleTool,
-					Content:    string(result),
+					Content:    result.Content,
 					ToolCallID: tc.ID,
 				})
 			}
@@ -224,8 +231,8 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 			}
 
 			var contentBuf string
-			var toolCalls []model.ToolCall
-			currentToolIdx := -1
+			streamedTools := make(map[int]*streamToolCall)
+			var toolOrder []int
 
 			for chunk := range stream {
 				switch chunk.Type {
@@ -233,28 +240,37 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 					contentBuf += chunk.Content
 					a.emit(ch, Event{Type: "text_delta", Content: chunk.Content})
 				case "tool_call_start":
-					toolCalls = append(toolCalls, model.ToolCall{
-						ID:   chunk.ToolCallID,
-						Name: chunk.ToolName,
-					})
-					currentToolIdx = len(toolCalls) - 1
-					a.emit(ch, Event{
-						Type: "tool_call",
-						ToolCall: &ToolCallEvent{
-							ID:   chunk.ToolCallID,
-							Name: chunk.ToolName,
-						},
-					})
-				case "tool_call_args":
-					if currentToolIdx >= 0 {
-						toolCalls[currentToolIdx].Arguments += chunk.ToolArgs
+					call := ensureStreamToolCall(streamedTools, &toolOrder, chunk.ToolIndex)
+					if chunk.ToolCallID != "" {
+						call.ID = chunk.ToolCallID
 					}
+					if chunk.ToolName != "" {
+						call.Name = chunk.ToolName
+					}
+					if !call.announced && call.Name != "" {
+						call.announced = true
+						a.emit(ch, Event{
+							Type: "tool_call",
+							ToolCall: &ToolCallEvent{
+								ID:   call.ID,
+								Name: call.Name,
+							},
+						})
+					}
+				case "tool_call_args":
+					call := ensureStreamToolCall(streamedTools, &toolOrder, chunk.ToolIndex)
+					if chunk.ToolCallID != "" {
+						call.ID = chunk.ToolCallID
+					}
+					call.Arguments += chunk.ToolArgs
 				case "done":
 				case "error":
 					a.emit(ch, Event{Type: "error", Content: chunk.Content})
 					return
 				}
 			}
+
+			toolCalls := orderedStreamToolCalls(streamedTools, toolOrder)
 
 			assistantMsg := model.Message{
 				Role:      model.RoleAssistant,
@@ -286,13 +302,13 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 					ToolResult: &ToolResultEvent{
 						ToolCallID: tc.ID,
 						Name:       tc.Name,
-						Output:     truncate(string(result), 500),
+						Output:     truncate(result.Content, 500),
 					},
 				})
 
 				messages = append(messages, model.Message{
 					Role:       model.RoleTool,
-					Content:    string(result),
+					Content:    result.Content,
 					ToolCallID: tc.ID,
 				})
 			}
@@ -305,12 +321,11 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 	return ch, nil
 }
 
-func (a *Agent) executeTool(ctx context.Context, tc model.ToolCall) json.RawMessage {
+func (a *Agent) executeTool(ctx context.Context, tc model.ToolCall) tool.Result {
 	t, ok := a.registry.Get(tc.Name)
 	if !ok {
 		log.Printf("unknown tool: %s", tc.Name)
-		errJSON, _ := json.Marshal(map[string]string{"error": fmt.Sprintf("unknown tool: %s", tc.Name)})
-		return errJSON
+		return tool.Result{Content: fmt.Sprintf("Error: unknown tool: %s", tc.Name), Error: true}
 	}
 
 	call := &middleware.ToolCall{
@@ -347,6 +362,32 @@ func (a *Agent) buildToolDefinitions() []model.ToolFuncDef {
 			Description: d.Description,
 			Parameters:  d.Parameters,
 		}
+	}
+	return result
+}
+
+func ensureStreamToolCall(calls map[int]*streamToolCall, order *[]int, index int) *streamToolCall {
+	if call, ok := calls[index]; ok {
+		return call
+	}
+	call := &streamToolCall{}
+	calls[index] = call
+	*order = append(*order, index)
+	return call
+}
+
+func orderedStreamToolCalls(calls map[int]*streamToolCall, order []int) []model.ToolCall {
+	result := make([]model.ToolCall, 0, len(order))
+	for _, index := range order {
+		call := calls[index]
+		if call == nil || call.Name == "" {
+			continue
+		}
+		result = append(result, model.ToolCall{
+			ID:        call.ID,
+			Name:      call.Name,
+			Arguments: call.Arguments,
+		})
 	}
 	return result
 }

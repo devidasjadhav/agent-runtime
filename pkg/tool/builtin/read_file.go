@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
@@ -24,15 +25,11 @@ func (t *ReadFileTool) Description() string {
 }
 
 func (t *ReadFileTool) Parameters() tool.ToolSchema {
-	return tool.ToolSchema{
-		Type: "object",
-		Properties: map[string]tool.ToolPropertySchema{
-			"file_path": {Type: "string", Description: "Absolute path to the file."},
-			"offset":    {Type: "integer", Description: "Line number to start from (0-indexed).", Default: 0},
-			"limit":     {Type: "integer", Description: "Max lines to read.", Default: 2000},
-		},
-		Required: []string{"file_path"},
-	}
+	return tool.ObjectSchema([]string{"file_path"}, map[string]tool.ToolPropertySchema{
+		"file_path": tool.StringProperty("Absolute path to the file."),
+		"offset":    tool.IntegerProperty("Line number to start from (0-indexed).", 0),
+		"limit":     tool.IntegerProperty("Maximum number of lines to read. Use for pagination of large files.", 100),
+	})
 }
 
 type readFileArgs struct {
@@ -41,21 +38,37 @@ type readFileArgs struct {
 	Limit    int    `json:"limit,omitempty"`
 }
 
-func (t *ReadFileTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (t *ReadFileTool) Execute(ctx context.Context, args json.RawMessage) (tool.Result, error) {
 	var a readFileArgs
 	if err := json.Unmarshal(args, &a); err != nil {
-		return nil, fmt.Errorf("parse args: %w", err)
+		return tool.Result{}, fmt.Errorf("parse args: %w", err)
 	}
 	limit := a.Limit
 	if limit <= 0 {
-		limit = 2000
+		limit = 100
 	}
 	result, err := t.sbx.ReadFile(ctx, a.FilePath, a.Offset, limit)
 	if err != nil {
-		return json.Marshal(map[string]any{"error": err.Error()})
+		return tool.Result{Content: "Error: " + err.Error(), Error: true}, nil
 	}
 	if result.Error != "" {
-		return json.Marshal(map[string]any{"error": result.Error})
+		return tool.Result{Content: "Error: " + result.Error, Error: true}, nil
 	}
-	return json.Marshal(map[string]any{"content": result.Content})
+	if strings.TrimSpace(result.Content) == "" {
+		return tool.Result{Content: "System reminder: File exists but has empty contents"}, nil
+	}
+
+	lines := strings.Split(result.Content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	var b strings.Builder
+	for i, line := range lines {
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		fmt.Fprintf(&b, "%6d\t%s", a.Offset+i+1, line)
+	}
+	return tool.Result{Content: truncateReadOutput(b.String())}, nil
 }

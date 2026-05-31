@@ -3,13 +3,15 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+
+	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
 )
 
 type Middleware interface {
 	BeforeModel(ctx context.Context, state *State) (*State, error)
 	AfterModel(ctx context.Context, state *State, resp *ModelResult) (*State, error)
 	BeforeTool(ctx context.Context, call *ToolCall) (*ToolCall, error)
-	AfterTool(ctx context.Context, call *ToolCall, result json.RawMessage) (json.RawMessage, error)
+	AfterTool(ctx context.Context, call *ToolCall, result tool.Result) (tool.Result, error)
 }
 
 type State struct {
@@ -69,7 +71,7 @@ func (c Chain) BeforeTool(ctx context.Context, call *ToolCall) (*ToolCall, error
 	return call, nil
 }
 
-func (c Chain) AfterTool(ctx context.Context, call *ToolCall, result json.RawMessage) (json.RawMessage, error) {
+func (c Chain) AfterTool(ctx context.Context, call *ToolCall, result tool.Result) (tool.Result, error) {
 	var err error
 	for i := len(c) - 1; i >= 0; i-- {
 		result, err = c[i].AfterTool(ctx, call, result)
@@ -89,6 +91,6 @@ func (noopMiddleware) AfterModel(_ context.Context, state *State, _ *ModelResult
 func (noopMiddleware) BeforeTool(_ context.Context, call *ToolCall) (*ToolCall, error) {
 	return call, nil
 }
-func (noopMiddleware) AfterTool(_ context.Context, _ *ToolCall, result json.RawMessage) (json.RawMessage, error) {
+func (noopMiddleware) AfterTool(_ context.Context, _ *ToolCall, result tool.Result) (tool.Result, error) {
 	return result, nil
 }

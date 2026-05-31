@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
@@ -24,14 +25,10 @@ func (t *ExecuteTool) Description() string {
 }
 
 func (t *ExecuteTool) Parameters() tool.ToolSchema {
-	return tool.ToolSchema{
-		Type: "object",
-		Properties: map[string]tool.ToolPropertySchema{
-			"command": {Type: "string", Description: "Shell command to execute."},
-			"timeout": {Type: "integer", Description: "Optional timeout in seconds."},
-		},
-		Required: []string{"command"},
-	}
+	return tool.ObjectSchema([]string{"command"}, map[string]tool.ToolPropertySchema{
+		"command": tool.StringProperty("Shell command to execute."),
+		"timeout": tool.IntegerProperty("Optional timeout in seconds.", nil),
+	})
 }
 
 type executeArgs struct {
@@ -39,17 +36,29 @@ type executeArgs struct {
 	Timeout *int   `json:"timeout,omitempty"`
 }
 
-func (t *ExecuteTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (t *ExecuteTool) Execute(ctx context.Context, args json.RawMessage) (tool.Result, error) {
 	var a executeArgs
 	if err := json.Unmarshal(args, &a); err != nil {
-		return nil, fmt.Errorf("parse args: %w", err)
+		return tool.Result{}, fmt.Errorf("parse args: %w", err)
+	}
+	if a.Timeout != nil && *a.Timeout < 0 {
+		return tool.Result{Content: "Error: timeout must be non-negative", Error: true}, nil
 	}
 	result, err := t.sbx.Exec(ctx, a.Command, a.Timeout)
 	if err != nil {
-		return json.Marshal(map[string]any{"error": err.Error(), "exit_code": 1})
+		return tool.Result{Content: "Error: " + err.Error(), Error: true}, nil
 	}
-	return json.Marshal(map[string]any{
-		"output":    result.Output,
-		"exit_code": result.ExitCode,
-	})
+
+	status := fmt.Sprintf("[Command succeeded with exit code %d]", result.ExitCode)
+	if result.ExitCode != 0 {
+		status = fmt.Sprintf("[Command failed with exit code %d]", result.ExitCode)
+	}
+
+	content := strings.TrimRight(truncateExecuteOutput(result.Output), "\n")
+	if content != "" {
+		content += "\n"
+	}
+	content += status
+
+	return tool.Result{Content: content}, nil
 }

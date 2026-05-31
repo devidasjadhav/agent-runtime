@@ -28,7 +28,12 @@ type Tool interface {
 	Name() string
 	Description() string
 	Parameters() ToolSchema
-	Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error)
+	Execute(ctx context.Context, args json.RawMessage) (Result, error)
+}
+
+type Result struct {
+	Content string
+	Error   bool
 }
 
 type Registry struct {

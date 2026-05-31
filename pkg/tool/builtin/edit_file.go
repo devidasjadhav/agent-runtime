@@ -24,16 +24,12 @@ func (t *EditFileTool) Description() string {
 }
 
 func (t *EditFileTool) Parameters() tool.ToolSchema {
-	return tool.ToolSchema{
-		Type: "object",
-		Properties: map[string]tool.ToolPropertySchema{
-			"file_path":   {Type: "string", Description: "Absolute path to the file to edit."},
-			"old_string":  {Type: "string", Description: "The exact text to find."},
-			"new_string":  {Type: "string", Description: "The text to replace it with."},
-			"replace_all": {Type: "boolean", Description: "Replace all occurrences.", Default: false},
-		},
-		Required: []string{"file_path", "old_string", "new_string"},
-	}
+	return tool.ObjectSchema([]string{"file_path", "old_string", "new_string"}, map[string]tool.ToolPropertySchema{
+		"file_path":   tool.StringProperty("Absolute path to the file to edit."),
+		"old_string":  tool.StringProperty("The exact text to find."),
+		"new_string":  tool.StringProperty("The text to replace it with."),
+		"replace_all": tool.BooleanProperty("Replace all occurrences.", false),
+	})
 }
 
 type editFileArgs struct {
@@ -43,17 +39,17 @@ type editFileArgs struct {
 	ReplaceAll bool   `json:"replace_all,omitempty"`
 }
 
-func (t *EditFileTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (t *EditFileTool) Execute(ctx context.Context, args json.RawMessage) (tool.Result, error) {
 	var a editFileArgs
 	if err := json.Unmarshal(args, &a); err != nil {
-		return nil, fmt.Errorf("parse args: %w", err)
+		return tool.Result{}, fmt.Errorf("parse args: %w", err)
 	}
 	result, err := t.sbx.EditFile(ctx, a.FilePath, a.OldString, a.NewString, a.ReplaceAll)
 	if err != nil {
-		return json.Marshal(map[string]any{"error": err.Error()})
+		return tool.Result{Content: "Error: " + err.Error(), Error: true}, nil
 	}
 	if result.Error != "" {
-		return json.Marshal(map[string]any{"error": result.Error})
+		return tool.Result{Content: result.Error, Error: true}, nil
 	}
-	return json.Marshal(map[string]any{"success": true, "path": result.Path, "occurrences": result.Occurrences})
+	return tool.Result{Content: fmt.Sprintf("Successfully replaced %d instance(s) of the string in '%s'", result.Occurrences, result.Path)}, nil
 }

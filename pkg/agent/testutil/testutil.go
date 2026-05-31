@@ -9,8 +9,9 @@ import (
 )
 
 type FakeProvider struct {
-	Responses []FakeResponse
-	callIndex int
+	Responses    []FakeResponse
+	StreamChunks []model.ModelChunk
+	callIndex    int
 }
 
 type FakeResponse struct {
@@ -48,6 +49,17 @@ func (f *FakeProvider) Complete(_ context.Context, req model.ModelRequest) (*mod
 }
 
 func (f *FakeProvider) Stream(ctx context.Context, req model.ModelRequest) (<-chan model.ModelChunk, error) {
+	if f.StreamChunks != nil {
+		ch := make(chan model.ModelChunk, len(f.StreamChunks))
+		go func() {
+			defer close(ch)
+			for _, chunk := range f.StreamChunks {
+				ch <- chunk
+			}
+		}()
+		return ch, nil
+	}
+
 	resp, err := f.Complete(ctx, req)
 	if err != nil {
 		return nil, err
@@ -59,9 +71,9 @@ func (f *FakeProvider) Stream(ctx context.Context, req model.ModelRequest) (<-ch
 		if resp.Message.Content != "" {
 			ch <- model.ModelChunk{Type: "content", Content: resp.Message.Content}
 		}
-		for _, tc := range resp.Message.ToolCalls {
-			ch <- model.ModelChunk{Type: "tool_call_start", ToolCallID: tc.ID, ToolName: tc.Name}
-			ch <- model.ModelChunk{Type: "tool_call_args", ToolCallID: tc.ID, ToolArgs: tc.Arguments}
+		for i, tc := range resp.Message.ToolCalls {
+			ch <- model.ModelChunk{Type: "tool_call_start", ToolIndex: i, ToolCallID: tc.ID, ToolName: tc.Name}
+			ch <- model.ModelChunk{Type: "tool_call_args", ToolIndex: i, ToolCallID: tc.ID, ToolArgs: tc.Arguments}
 		}
 		ch <- model.ModelChunk{Type: "done", Done: true}
 	}()
@@ -74,13 +86,13 @@ type FakeTool struct {
 	params      json.RawMessage
 	lastArgs    json.RawMessage
 	callCount   int
-	result      json.RawMessage
+	result      tool.Result
 }
 
 func NewFakeTool(name string, result json.RawMessage) *FakeTool {
 	return &FakeTool{
 		name:   name,
-		result: result,
+		result: tool.Result{Content: string(result)},
 	}
 }
 
@@ -95,7 +107,7 @@ func (t *FakeTool) Parameters() tool.ToolSchema {
 		Required: []string{"input"},
 	}
 }
-func (t *FakeTool) Execute(_ context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (t *FakeTool) Execute(_ context.Context, args json.RawMessage) (tool.Result, error) {
 	t.lastArgs = args
 	t.callCount++
 	return t.result, nil

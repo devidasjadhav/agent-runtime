@@ -24,14 +24,10 @@ func (t *WriteFileTool) Description() string {
 }
 
 func (t *WriteFileTool) Parameters() tool.ToolSchema {
-	return tool.ToolSchema{
-		Type: "object",
-		Properties: map[string]tool.ToolPropertySchema{
-			"file_path": {Type: "string", Description: "Absolute path where the file should be created."},
-			"content":   {Type: "string", Description: "The text content to write."},
-		},
-		Required: []string{"file_path", "content"},
-	}
+	return tool.ObjectSchema([]string{"file_path", "content"}, map[string]tool.ToolPropertySchema{
+		"file_path": tool.StringProperty("Absolute path where the file should be created."),
+		"content":   tool.StringProperty("The text content to write."),
+	})
 }
 
 type writeFileArgs struct {
@@ -39,17 +35,17 @@ type writeFileArgs struct {
 	Content  string `json:"content"`
 }
 
-func (t *WriteFileTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
+func (t *WriteFileTool) Execute(ctx context.Context, args json.RawMessage) (tool.Result, error) {
 	var a writeFileArgs
 	if err := json.Unmarshal(args, &a); err != nil {
-		return nil, fmt.Errorf("parse args: %w", err)
+		return tool.Result{}, fmt.Errorf("parse args: %w", err)
 	}
 	result, err := t.sbx.WriteFile(ctx, a.FilePath, []byte(a.Content))
 	if err != nil {
-		return json.Marshal(map[string]any{"error": err.Error()})
+		return tool.Result{Content: "Error: " + err.Error(), Error: true}, nil
 	}
 	if result.Error != "" {
-		return json.Marshal(map[string]any{"error": result.Error})
+		return tool.Result{Content: result.Error, Error: true}, nil
 	}
-	return json.Marshal(map[string]any{"success": true, "path": result.Path})
+	return tool.Result{Content: "Updated file " + result.Path}, nil
 }

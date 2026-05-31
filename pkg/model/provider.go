@@ -56,6 +56,7 @@ type Usage struct {
 type ModelChunk struct {
 	Type       string `json:"type"`
 	Content    string `json:"content,omitempty"`
+	ToolIndex  int    `json:"tool_index,omitempty"`
 	ToolCallID string `json:"tool_call_id,omitempty"`
 	ToolName   string `json:"tool_name,omitempty"`
 	ToolArgs   string `json:"tool_args,omitempty"`
