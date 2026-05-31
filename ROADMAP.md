@@ -140,6 +140,8 @@ Status: pending.
 
 ## Phase 3: Sandbox Providers
 
+Status: foundation implemented.
+
 Goal: move from local-dev-only sandboxing to production-compatible providers.
 
 ### 1. Base Sandbox
@@ -147,6 +149,17 @@ Goal: move from local-dev-only sandboxing to production-compatible providers.
 Deliverables:
 
 - `BaseSandbox` equivalent that implements file/search/edit operations via `Exec`.
+
+Status: complete. Includes file/search/edit/upload/download operations through Python helpers over `Exec`.
+
+### 1.5 Upload/Download Hardening
+
+Deliverables:
+
+- Local sandbox upload/download tests.
+- Base sandbox upload/download tests.
+
+Status: complete.
 
 ### 2. LangSmith Sandbox
 
@@ -156,6 +169,8 @@ Deliverables:
 - Upload/download integration.
 - GitHub proxy configuration hook surface.
 
+Status: package boundary and lifecycle hooks exist; concrete SDK adapter pending.
+
 ### 3. Additional Providers
 
 Deliverables:
@@ -163,6 +178,8 @@ Deliverables:
 - Daytona adapter.
 - Runloop adapter.
 - Modal adapter.
+
+Status: pending.
 
 ## Phase 4: Agent Parity Features
 

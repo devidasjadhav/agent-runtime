@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox/local"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool/builtin"
 )
@@ -195,6 +196,41 @@ func TestWriteFileNormalizesBackslashes(t *testing.T) {
 	}
 	if string(data) != "ok" {
 		t.Fatalf("unexpected content: %q", string(data))
+	}
+}
+
+func TestLocalSandboxUploadDownloadFiles(t *testing.T) {
+	dir := t.TempDir()
+	sbx, err := local.New(dir)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	uploads, err := sbx.UploadFiles(context.Background(), []sandbox.FileUpload{
+		{Path: "uploads/text.txt", Content: []byte("hello")},
+		{Path: "uploads/data.bin", Content: []byte{0, 1, 2}},
+	})
+	if err != nil {
+		t.Fatalf("UploadFiles: %v", err)
+	}
+	for _, upload := range uploads {
+		if upload.Error != "" {
+			t.Fatalf("upload error: %#v", upload)
+		}
+	}
+
+	downloads, err := sbx.DownloadFiles(context.Background(), []string{"uploads/text.txt", "uploads/data.bin", "uploads/missing.txt"})
+	if err != nil {
+		t.Fatalf("DownloadFiles: %v", err)
+	}
+	if string(downloads[0].Content) != "hello" {
+		t.Fatalf("unexpected text content: %q", string(downloads[0].Content))
+	}
+	if string(downloads[1].Content) != string([]byte{0, 1, 2}) {
+		t.Fatalf("unexpected binary content: %#v", downloads[1].Content)
+	}
+	if downloads[2].Error == "" {
+		t.Fatal("expected missing file download error")
 	}
 }
 
