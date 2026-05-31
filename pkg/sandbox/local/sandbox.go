@@ -368,7 +368,11 @@ func (s *LocalSandbox) resolve(path string) (string, error) {
 	normalized = filepath.Clean(normalized)
 	var abs string
 	if filepath.IsAbs(normalized) {
-		abs = normalized
+		if strings.HasPrefix(normalized, s.dir+string(filepath.Separator)) || normalized == s.dir {
+			abs = normalized
+		} else {
+			abs = filepath.Join(s.dir, strings.TrimPrefix(normalized, string(filepath.Separator)))
+		}
 	} else {
 		abs = filepath.Join(s.dir, normalized)
 	}

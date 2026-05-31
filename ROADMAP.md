@@ -50,6 +50,8 @@ Deliverables:
 
 ## Phase 1.5: Context And Large Result Eviction
 
+Status: first pass implemented.
+
 Goal: go beyond truncation and implement deepagents-like result offloading so long runs remain usable.
 
 ### 1. Tool Result Offload
@@ -60,6 +62,8 @@ Deliverables:
 - Replace model-facing content with a preview and pointer.
 - Include first and last lines in preview.
 
+Status: complete for agent-level tool result offload.
+
 ### 2. Message Budget Policy
 
 Deliverables:
@@ -68,12 +72,22 @@ Deliverables:
 - Track accumulated message size.
 - Decide when to truncate, offload, or summarize.
 
+Status: partial. Fixed character thresholds are implemented; policy is not yet configurable beyond runtime options.
+
 ### 3. Human Message Offload
 
 Deliverables:
 
 - Store large user messages under `/conversation_history/{uuid}.md`.
 - Replace them with a pointer and preview.
+
+Status: complete for large user messages.
+
+Remaining hardening:
+
+- Add retention/cleanup policy.
+- Preserve raw execute output before tool-level truncation if needed.
+- Revisit local shell isolation; shell commands can still address host absolute paths in dev mode.
 
 ## Phase 2: Provider Layer And Fallbacks
 

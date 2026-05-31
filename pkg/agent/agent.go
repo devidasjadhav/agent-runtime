@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/middleware"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/model"
+	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
 )
 
@@ -20,6 +22,13 @@ type Agent struct {
 	maxTokens     int
 	systemPrompt  string
 	maxIterations int
+	resultStore   ResultStore
+	offloadLimit  int
+	messageLimit  int
+}
+
+type ResultStore interface {
+	WriteFile(ctx context.Context, path string, content []byte) (sandbox.WriteResult, error)
 }
 
 type Option func(*Agent)
@@ -44,6 +53,17 @@ func WithMiddleware(m middleware.Middleware) Option {
 	return func(a *Agent) { a.middlewares = append(a.middlewares, m) }
 }
 
+func WithResultOffload(store ResultStore, limit int) Option {
+	return func(a *Agent) {
+		a.resultStore = store
+		a.offloadLimit = limit
+	}
+}
+
+func WithHumanMessageOffloadLimit(limit int) Option {
+	return func(a *Agent) { a.messageLimit = limit }
+}
+
 func New(provider model.Provider, registry *tool.Registry, opts ...Option) *Agent {
 	a := &Agent{
 		provider:      provider,
@@ -52,6 +72,8 @@ func New(provider model.Provider, registry *tool.Registry, opts ...Option) *Agen
 		modelID:       "gpt-4o",
 		maxTokens:     4096,
 		maxIterations: 50,
+		offloadLimit:  80_000,
+		messageLimit:  200_000,
 	}
 	for _, o := range opts {
 		o(a)
@@ -100,6 +122,7 @@ func (a *Agent) Run(ctx context.Context, input Input) (<-chan Event, error) {
 
 		messages := make([]model.Message, len(input.Messages))
 		copy(messages, input.Messages)
+		messages = a.maybeOffloadHumanMessages(ctx, messages)
 
 		toolDefs := a.buildToolDefinitions()
 
@@ -201,6 +224,7 @@ func (a *Agent) RunStreaming(ctx context.Context, input Input) (<-chan Event, er
 
 		messages := make([]model.Message, len(input.Messages))
 		copy(messages, input.Messages)
+		messages = a.maybeOffloadHumanMessages(ctx, messages)
 
 		toolDefs := a.buildToolDefinitions()
 
@@ -350,7 +374,116 @@ func (a *Agent) executeTool(ctx context.Context, tc model.ToolCall) tool.Result 
 		return middleware.WrapToolError(tc.Name, err)
 	}
 
-	return result
+	return a.maybeOffloadToolResult(ctx, tc, result)
+}
+
+func (a *Agent) maybeOffloadToolResult(ctx context.Context, tc model.ToolCall, result tool.Result) tool.Result {
+	if result.Error || a.resultStore == nil || a.offloadLimit <= 0 || len(result.Content) <= a.offloadLimit || !shouldOffloadTool(tc.Name) {
+		return result
+	}
+
+	toolCallID := tc.ID
+	if toolCallID == "" {
+		toolCallID = tc.Name
+	}
+	path := "/large_tool_results/" + sanitizeToolCallID(toolCallID)
+	writeResult, err := a.resultStore.WriteFile(ctx, path, []byte(result.Content))
+	if err != nil {
+		return tool.Result{Content: result.Content + "\n\n[Large result offload failed: " + err.Error() + "]"}
+	}
+	if writeResult.Error != "" {
+		return tool.Result{Content: result.Content + "\n\n[Large result offload failed: " + writeResult.Error + "]"}
+	}
+
+	return tool.Result{Content: largeResultPreview(toolCallID, path, result.Content)}
+}
+
+func (a *Agent) maybeOffloadHumanMessages(ctx context.Context, messages []model.Message) []model.Message {
+	if a.resultStore == nil || a.messageLimit <= 0 {
+		return messages
+	}
+	for i := range messages {
+		if messages[i].Role != model.RoleUser || len(messages[i].Content) <= a.messageLimit {
+			continue
+		}
+		path := fmt.Sprintf("/conversation_history/message_%d_%d.md", i, time.Now().UnixNano())
+		writeResult, err := a.resultStore.WriteFile(ctx, path, []byte(messages[i].Content))
+		if err != nil || writeResult.Error != "" {
+			continue
+		}
+		messages[i].Content = largeHumanMessagePreview(path, messages[i].Content)
+	}
+	return messages
+}
+
+func largeHumanMessagePreview(path, content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	var b strings.Builder
+	b.WriteString("The user message was too large and was saved in the filesystem at this path: ")
+	b.WriteString(path)
+	b.WriteString("\n\n")
+	b.WriteString("You can read it with read_file, but only read part of it at a time.\n\n")
+	b.WriteString("Preview:\n")
+	writePreviewLines(&b, lines)
+	return b.String()
+}
+
+func shouldOffloadTool(name string) bool {
+	switch name {
+	case "ls", "glob", "grep", "read_file", "edit_file", "write_file":
+		return false
+	default:
+		return true
+	}
+}
+
+func sanitizeToolCallID(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			b.WriteRune(r)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "tool_result"
+	}
+	return b.String()
+}
+
+func largeResultPreview(toolCallID, path, content string) string {
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 && lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tool result too large, the result of this tool call %s was saved in the filesystem at this path: %s\n\n", toolCallID, path)
+	b.WriteString("You can read the result from the filesystem by using the read_file tool, but make sure to only read part of the result at a time.\n\n")
+	b.WriteString("Preview:\n")
+
+	writePreviewLines(&b, lines)
+	return b.String()
+}
+
+func writePreviewLines(b *strings.Builder, lines []string) {
+	if len(lines) <= 10 {
+		for i, line := range lines {
+			fmt.Fprintf(b, "%6d\t%s\n", i+1, line)
+		}
+		return
+	}
+	for i := 0; i < 5; i++ {
+		fmt.Fprintf(b, "%6d\t%s\n", i+1, lines[i])
+	}
+	b.WriteString("...\n")
+	for i := len(lines) - 5; i < len(lines); i++ {
+		fmt.Fprintf(b, "%6d\t%s\n", i+1, lines[i])
+	}
 }
 
 func (a *Agent) buildToolDefinitions() []model.ToolFuncDef {

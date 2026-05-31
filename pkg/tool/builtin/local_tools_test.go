@@ -113,7 +113,7 @@ func TestWriteFileRefusesOverwrite(t *testing.T) {
 	}
 }
 
-func TestWriteFileRejectsPathOutsideSandbox(t *testing.T) {
+func TestWriteFileMapsVirtualAbsolutePathIntoSandbox(t *testing.T) {
 	dir := t.TempDir()
 	sbx, err := local.New(dir)
 	if err != nil {
@@ -125,11 +125,15 @@ func TestWriteFileRejectsPathOutsideSandbox(t *testing.T) {
 	if err != nil {
 		t.Fatalf("write Execute: %v", err)
 	}
-	if !result.Error {
-		t.Fatal("expected outside path to be marked as error")
+	if result.Error {
+		t.Fatalf("expected virtual absolute path to map into sandbox, got %q", result.Content)
 	}
-	if !strings.Contains(result.Content, "path escapes sandbox root") {
-		t.Fatalf("unexpected outside path error: %q", result.Content)
+	expectedPath := filepath.Join(dir, "tmp", "outside-agent-runtime-test.txt")
+	if result.Content != "Updated file "+expectedPath {
+		t.Fatalf("unexpected virtual absolute path result: %q", result.Content)
+	}
+	if _, err := os.Stat(expectedPath); err != nil {
+		t.Fatalf("expected file inside sandbox: %v", err)
 	}
 }
 

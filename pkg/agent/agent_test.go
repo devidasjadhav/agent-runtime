@@ -3,11 +3,15 @@ package agent_test
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/agent"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/agent/testutil"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/model"
+	"github.com/anomalyco/open-swe/agent-runtime/pkg/sandbox/local"
 	"github.com/anomalyco/open-swe/agent-runtime/pkg/tool"
 )
 
@@ -236,6 +240,127 @@ func TestAgent_UnknownTool(t *testing.T) {
 	}
 	if toolResultContent != "Error: unknown tool: nonexistent_tool" {
 		t.Fatal("expected error in tool result for unknown tool")
+	}
+}
+
+func TestAgent_OffloadsLargeToolResult(t *testing.T) {
+	dir := t.TempDir()
+	sbx, err := local.New(dir)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	largeContent := strings.Join([]string{
+		"line 1",
+		"line 2",
+		"line 3",
+		"line 4",
+		"line 5",
+		"line 6",
+		"line 7",
+		"line 8",
+		"line 9",
+		"line 10",
+		"line 11",
+	}, "\n")
+	largeTool := testutil.NewFakeTool("execute", json.RawMessage(largeContent))
+
+	provider := &testutil.FakeProvider{
+		Responses: []testutil.FakeResponse{
+			{ToolCalls: []model.ToolCall{{ID: "call/big", Name: "execute", Arguments: `{}`}}},
+			{Content: "done", Stop: true},
+		},
+	}
+
+	registry := tool.NewRegistry()
+	registry.Register(largeTool)
+
+	ag := agent.New(provider, registry,
+		agent.WithMaxIterations(5),
+		agent.WithResultOffload(sbx, 20),
+	)
+
+	events, err := ag.Run(context.Background(), agent.Input{
+		Messages: []model.Message{{Role: model.RoleUser, Content: "run large tool"}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	var toolResult string
+	for evt := range events {
+		if evt.Type == "tool_result" && evt.ToolResult != nil {
+			toolResult = evt.ToolResult.Output
+		}
+	}
+
+	if !strings.Contains(toolResult, "Tool result too large") {
+		t.Fatalf("expected offload preview, got %q", toolResult)
+	}
+	if !strings.Contains(toolResult, "/large_tool_results/call_big") {
+		t.Fatalf("expected sanitized offload path, got %q", toolResult)
+	}
+	if !strings.Contains(toolResult, "line 1") || !strings.Contains(toolResult, "line 11") {
+		t.Fatalf("expected first and last preview lines, got %q", toolResult)
+	}
+
+	savedPath := filepath.Join(dir, "large_tool_results", "call_big")
+	saved, err := os.ReadFile(savedPath)
+	if err != nil {
+		t.Fatalf("read saved offload file: %v", err)
+	}
+	if string(saved) != largeContent {
+		t.Fatalf("saved content mismatch\nexpected: %q\nactual:   %q", largeContent, string(saved))
+	}
+}
+
+func TestAgent_OffloadsLargeHumanMessage(t *testing.T) {
+	dir := t.TempDir()
+	sbx, err := local.New(dir)
+	if err != nil {
+		t.Fatalf("local.New: %v", err)
+	}
+
+	provider := &testutil.FakeProvider{
+		Responses: []testutil.FakeResponse{{Content: "done", Stop: true}},
+	}
+	registry := tool.NewRegistry()
+	ag := agent.New(provider, registry,
+		agent.WithResultOffload(sbx, 80_000),
+		agent.WithHumanMessageOffloadLimit(20),
+	)
+
+	largeMessage := "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11"
+	events, err := ag.Run(context.Background(), agent.Input{
+		Messages: []model.Message{{Role: model.RoleUser, Content: largeMessage}},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	for range events {
+	}
+
+	if len(provider.Requests) == 0 {
+		t.Fatal("expected provider request")
+	}
+	content := provider.Requests[0].Messages[0].Content
+	if !strings.Contains(content, "The user message was too large") || !strings.Contains(content, "/conversation_history/") {
+		t.Fatalf("expected offloaded human message preview, got %q", content)
+	}
+
+	files, err := os.ReadDir(filepath.Join(dir, "conversation_history"))
+	if err != nil {
+		t.Fatalf("read conversation_history: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected one offloaded message file, got %d", len(files))
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, "conversation_history", files[0].Name()))
+	if err != nil {
+		t.Fatalf("read offloaded message: %v", err)
+	}
+	if string(saved) != largeMessage {
+		t.Fatalf("saved human message mismatch")
 	}
 }
 
