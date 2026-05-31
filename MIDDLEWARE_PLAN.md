@@ -9,7 +9,7 @@ Reference: deepagents source at `/tmp/deepagents_pkg/` (local copy only).
 
 ## Phase A — MemoryMiddleware
 
-**Status:** pending
+**Status:** ✅ complete — commit `9531a1f`
 
 **Goal:** Inject AGENTS.md file content into the system prompt before every model call,
 giving the agent persistent knowledge that survives sandbox restarts.
@@ -36,7 +36,7 @@ giving the agent persistent knowledge that survives sandbox restarts.
 
 ## Phase B — FilesystemACLMiddleware
 
-**Status:** pending
+**Status:** ✅ complete — commit `aec78a2`
 
 **Goal:** Block file/execute tool calls that violate caller-supplied path rules before they reach the tool.
 
@@ -62,7 +62,7 @@ giving the agent persistent knowledge that survives sandbox restarts.
 
 ## Phase C — SkillsMiddleware
 
-**Status:** pending  
+**Status:** ✅ complete — commit `a02a0d6`  
 **Depends on:** Phase A infra (`SystemPromptExtensions`)
 
 **Goal:** Load SKILL.md files, parse YAML frontmatter, inject a skill directory into the system prompt.
@@ -91,7 +91,7 @@ Full skill content is read on-demand by the agent via `read_file` (progressive d
 
 ## Phase D — HumanInTheLoopMiddleware
 
-**Status:** pending
+**Status:** ✅ complete — commit `ae2907e`
 
 **Goal:** Pause agent execution before configurable trigger conditions (e.g., destructive tool calls),
 signal out to a human-facing channel, resume or abort based on the response.
@@ -149,8 +149,8 @@ Structured output support in `model.Provider` (`ResponseFormat[T]` or equivalent
 
 | Phase | Middleware | Status | Depends on | Complexity |
 |---|---|---|---|---|
-| A | MemoryMiddleware | pending | — | Simple |
-| B | FilesystemACLMiddleware | pending | — | Medium |
-| C | SkillsMiddleware | pending | Phase A infra | Medium |
-| D | HumanInTheLoopMiddleware | pending | — | Medium |
+| A | MemoryMiddleware | ✅ complete | — | Simple |
+| B | FilesystemACLMiddleware | ✅ complete | — | Medium |
+| C | SkillsMiddleware | ✅ complete | Phase A infra | Medium |
+| D | HumanInTheLoopMiddleware | ✅ complete | — | Medium |
 | E | RubricMiddleware | deferred | Structured output | Complex |
